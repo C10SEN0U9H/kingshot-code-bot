@@ -1,10 +1,10 @@
 import os
-import re
 import json
 import requests
+from bs4 import BeautifulSoup
 
 # Target webpage providing Kingshot gift codes
-URL = "https://kingshot.net/gift-codes"
+URL = "https://kingshot.net"
 HISTORY_FILE = "codes_history.txt"
 
 def fetch_active_codes():
@@ -13,22 +13,23 @@ def fetch_active_codes():
         response = requests.get(URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
         response.raise_for_status()
         
-        # Scrape the webpage text using regular expressions to extract alphanumeric codes
-        # Target common active codes listed (e.g., VIP1017, KS1017, IG200KS)
-        text_content = response.text
-        
-        # Find matches for potential standard code patterns mentioned on the page
-        found_codes = re.findall(r'\b[A-Z0-9]{5,15}\b', text_content)
-        
-        # Filter for known valid seeds or prefixes if needed, or take the unique list
-        # Kingshot codes are usually uppercase mixed with numbers
+        # Parse the page layout cleanly using BeautifulSoup
+        soup = BeautifulSoup(response.text, 'html.parser')
         valid_codes = set()
-        for code in found_codes:
-            # Simple verification filter to avoid capturing UI layout strings
-            if any(char.isdigit() for char in code) and any(char.isalpha() for char in code):
-                if not code.startswith("VERSION") and not code.startswith("UTC"):
-                    valid_codes.add(code)
-                    
+
+        # Target the code blocks specifically
+        # We look for common card layouts, header elements, or button sibling structures
+        # where gift codes are traditionally text-nested on kingshot.net
+        for element in soup.find_all(text=True):
+            cleaned = element.strip()
+            # Filter for the exact text lengths of the active codes shown in your panels
+            if 5 <= len(cleaned) <= 12 and cleaned.isalnum():
+                # Avoid collecting common non-code interface labels 
+                if cleaned not in ["Active", "Expired", "Copy Code", "Redeem Now", "Share Link"]:
+                    # Ensure it matches common game code formats (has letters and numbers, or is fully uppercase)
+                    if cleaned.isupper() or (any(c.isdigit() for c in cleaned) and any(c.isalpha() for c in cleaned)):
+                        valid_codes.add(cleaned)
+                        
         return list(valid_codes)
     except Exception as e:
         print(f"Error scraping the website: {e}")
@@ -54,13 +55,12 @@ def send_to_discord(new_code):
     payload = {
         "username": "Kingshot Code Watcher",
         "avatar_url": "https://kingshot.net",
-        "content": f"🚨 **New Kingshot Gift Code Spotted!** 🚨\n\nGrab it quickly: `{new_code}`\n\n🔗 Redeem it in-game or via the [Kingshot Gift Code Center](https://kingshot.net/gift-codes).",
-        "embeds": []
+        "content": f"🚨 **New Kingshot Gift Code Spotted!** 🚨\n\nGrab it quickly: `{new_code}`\n\n🔗 Redeem it in-game or via the [Kingshot Gift Code Center](https://kingshot.net).",
     }
     
     headers = {"Content-Type": "application/json"}
     response = requests.post(webhook_url, data=json.dumps(payload), headers=headers)
-    if response.status_code in [200, 204]:
+    if response.status_code in:
         print(f"Successfully posted code {new_code} to Discord!")
     else:
         print(f"Failed to post to Discord. Status code: {response.status_code}")
@@ -72,14 +72,18 @@ def main():
         return
 
     history = load_history()
-    new_discoveries = [code for code in active_codes if code not in history]
+    
+    # Clean out any bad data from previous test runs out of our tracking loop
+    clean_history = [item for item in history if not (any(x in item.lower() for x in ['019l5', 'version', 'utc']))]
+    
+    new_discoveries = [code for code in active_codes if code not in clean_history]
 
     if new_discoveries:
         print(f"Found new codes: {new_discoveries}")
         for code in new_discoveries:
             send_to_discord(code)
-            history.append(code)
-        save_history(history)
+            clean_history.append(code)
+        save_history(clean_history)
     else:
         print("No new codes discovered since the last check.")
 
